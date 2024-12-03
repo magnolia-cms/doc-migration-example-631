@@ -45,8 +45,8 @@ import info.magnolia.objectfactory.Components;
 import info.magnolia.resourceloader.Resource;
 import info.magnolia.resourceloader.ResourceOrigin;
 import info.magnolia.resourceloader.layered.LayeredResource;
-import info.magnolia.ui.datasource.optionlist.Option;
 import info.magnolia.ui.filter.DataFilter;
+import info.magnolia.ui.filter.FilterValue;
 
 import java.util.Arrays;
 import java.util.Collection;
@@ -54,6 +54,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Stream;
 
 import javax.inject.Inject;
@@ -111,9 +112,22 @@ public class ResourceFilteringDataProvider extends AbstractBackEndDataProvider<R
     }
 
     private boolean applyFilter(Resource resource, DataFilter filter) {
-        return shouldBeVisible(resource) && filter.getPropertyFilters().entrySet().stream()
+        return shouldBeVisible(resource) && matchSearch(resource, filter.getFullTextSearchStatement()) && filter.getPropertyFilters().entrySet().stream()
                 .filter(stringObjectEntry -> !"".equals(stringObjectEntry.getValue())) //empty text filter
-                .allMatch(stringObjectEntry -> filter(stringObjectEntry.getValue(), resource, stringObjectEntry.getKey()));
+                .allMatch(stringObjectEntry -> {
+                    Optional<Object> filterValue = Optional.of(stringObjectEntry.getValue())
+                            .filter(v -> v instanceof FilterValue<?>)
+                            .map(v -> ((FilterValue<?>) v))
+                            .map(FilterValue::getValue);
+                    return filterValue.map(o -> filter(o, resource, stringObjectEntry.getKey())).orElseGet(() -> filter(stringObjectEntry.getValue(), resource, stringObjectEntry.getKey()));
+                });
+    }
+
+    private boolean matchSearch(Resource resource, String searchText) {
+        return StringUtils.isBlank(searchText)
+                ||StringUtils.containsIgnoreCase(resource.getPath(), searchText)
+                || StringUtils.containsIgnoreCase(resource.getName(), searchText)
+                || StringUtils.containsIgnoreCase(TIKA.detect(resource.getName()), searchText);
     }
 
     private boolean filter(Object filterValue, Resource resource, String propertyName) {
@@ -126,9 +140,9 @@ public class ResourceFilteringDataProvider extends AbstractBackEndDataProvider<R
         } else if (COLUMN_NAME.equals(propertyName)) {
             return resource.getName().contains((String) filterValue);
         } else if (COLUMN_OVERRIDDEN.equals(propertyName)) {
-            return !((Boolean) filterValue) || (resource instanceof LayeredResource && ((LayeredResource) resource).getLayers().size() > 1);
+            return !(Boolean.parseBoolean(filterValue.toString())) || (resource instanceof LayeredResource && ((LayeredResource) resource).getLayers().size() > 1);
         } else if (COLUMN_STATUS.equals(propertyName)) {
-            int expectedStatus = Integer.parseInt(((Option) filterValue).getValue());
+            int expectedStatus = Integer.parseInt(filterValue.toString());
             return getJcrNode(resource)
                     .map(this::getActivationStatus)
                     .map(integer -> integer == expectedStatus)
